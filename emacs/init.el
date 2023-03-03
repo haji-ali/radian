@@ -37,6 +37,11 @@ loading the init-file twice if it were not for this variable.")
       (expand-file-name "init.local.el" user-emacs-directory)
       "File for local customizations of Radian.")
 
+    (defvar
+      radian-local-init-folder
+      (expand-file-name "init.d/" user-emacs-directory)
+      "Folder containing local customizations of Radian.")
+
     ;; Prevent package.el from modifying this file.
     (setq package-enable-at-startup nil)
 

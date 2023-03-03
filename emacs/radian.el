@@ -396,6 +396,53 @@ usual."
         `(progn ,@forms))
     `(load radian-local-init-file 'noerror 'nomessage)))
 
+(defmacro radian--load-local-init-folder ()
+  "Load local init-files, with crazy hacks for byte-compilation."
+  (let ((hook-name 'after-init)
+        (files (cl-loop for el in
+                        (directory-files
+                         radian-local-init-folder
+                         t
+                         "\\(.*\\)\\.el$")
+                        collect (file-name-nondirectory el) into ret
+                        finally return (sort ret 'string<))))
+      (if byte-compile-current-file
+      (let ((hook (intern (format "radian-%S-hook" hook-name)))
+            (hook-content))
+        (with-temp-buffer
+          ;; Save all file contents as forms in `hook-contents'
+          (ignore-errors
+            ;; Can't do this literally because it breaks Unicode
+            ;; characters.
+            (cl-loop for el in files
+                     do (progn
+                          (insert (with-temp-buffer
+                                    (insert-file-contents
+                                     (expand-file-name el radian-local-init-folder))
+                                    (buffer-string)))))
+            (goto-char (point-min))
+            (condition-case _
+                (while t
+                  (let ((body (read (current-buffer))))
+                    (push body hook-content)))
+              (end-of-file))))
+        ;; NOTE: To reverse or not to reverse!
+        (if-let (link (assq hook radian--hook-contents))
+            (progn
+              ;; TODO: Need to append stuff to it
+              (setq link (cons hook nil)))
+          (push (cons hook hook-content)
+                radian--hook-contents))
+        ;; Don't execute any forms now, they will be executed later
+        ;; in a hook
+        nil)
+    (append
+     `(radian-local-on-hook ,hook-name)
+     (cl-loop for el in files
+              collect
+              `(load ,(expand-file-name el radian-local-init-folder)
+                     'noerror 'nomessage))))))
+
 (defmacro radian-local-on-hook (name &rest body)
   "Register some code to be run on one of Radian's hooks.
 The hook to be used is `radian-NAME-hook', with NAME an unquoted
@@ -442,6 +489,7 @@ hook directly into the init-file during byte-compilation."
           (delete "--no-local" command-line-args))
 
   ;; Load local customizations.
+  (radian--load-local-init-folder)
   (radian--load-local-init-file))
 
 ;;; Startup optimizations
@@ -2348,6 +2396,7 @@ set LSP configuration (see `lsp-python-ms')."
     (when (derived-mode-p #'prog-mode #'text-mode)
       (unless (or radian-lsp-disable
                   (null buffer-file-name)
+                  (lsp-find-session-folder (lsp-session) buffer-file-name)
                   (derived-mode-p
                    ;; `lsp-mode' doesn't support Elisp, so let's avoid
                    ;; triggering the autoload just for checking that, yes,
