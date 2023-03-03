@@ -641,6 +641,10 @@ nice.)"
 
 ;;; Configure ~/.emacs.d paths
 
+;;  Package `compat' contains useful functions that are implemented in
+;; future emacsen.
+(radian-use-package compat)
+
 ;; Package `no-littering' changes the default paths for lots of
 ;; different packages, with the net result that the ~/.emacs.d folder
 ;; is much more clean and organized.
@@ -3472,7 +3476,7 @@ environment with point at the end of a non-empty line of text."
     (let ((needs-fixup (save-excursion
                          (beginning-of-line)
                          (re-search-forward
-                          "[^[:space:]]" (point-at-eol) 'noerror))))
+                          "[^[:space:]]" (compat-call pos-eol) 'noerror))))
       (prog1 (apply func args)
         (when needs-fixup
           (save-excursion
