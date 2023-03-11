@@ -19,15 +19,14 @@
 
   (defvar radian-local-init-folder
     (expand-file-name "init.d/" user-emacs-directory)
-    "Folder containing local customizations of Radian."))
-
-(defvar radian-lib-file (expand-file-name
-                         "radian.el"
-                         (file-name-directory
-                          (file-symlink-p (or user-init-file
-                                              "~/.emacs.d/init.el"))))
-  "File containing main Radian configuration.
-This file is loaded by init.el.")
+    "Folder containing local customizations of Radian.")
+  (defvar radian-lib-file (expand-file-name
+                           "radian.el"
+                           (file-name-directory
+                            (file-symlink-p (or user-init-file
+                                                "~/.emacs.d/init.el"))))
+    "File containing main Radian configuration.
+This file is loaded by init.el."))
 
 (defvar radian--finalize-init-hook nil
           "Hook run unconditionally after init, even if it fails.
@@ -610,6 +609,13 @@ binding the variable dynamically over the entire init-file."
 (setq straight-recipe-overrides nil)
 
 (radian--run-hook before-straight)
+
+(eval-when-compile
+  (load
+   (expand-file-name
+    "load-path.el"
+    (file-name-directory
+     radian-lib-file))))
 
 ;; Bootstrap the package manager, straight.el.
 (defvar bootstrap-version)
