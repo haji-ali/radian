@@ -4,7 +4,35 @@
 ;; then press C-c @ C-t. To also show the top-level functions and
 ;; variable declarations in each section, run M-x occur with the
 ;; following query: ^;;;;* \|^(
+;;; Redefinitions from init.el
 
+
+;;; Test native compile with this
+;;;  emacs -batch --no-site-file -q -f batch-byte-compile radian.el
+(defvar radian-minimum-emacs-version "27.1"
+  "Radian Emacs does not support any Emacs version below this.")
+
+(eval-and-compile
+  (defvar radian-local-init-file
+    (expand-file-name "init.local.el" user-emacs-directory)
+    "File for local customizations of Radian.")
+
+  (defvar radian-local-init-folder
+    (expand-file-name "init.d/" user-emacs-directory)
+    "Folder containing local customizations of Radian."))
+
+(defvar radian-lib-file (expand-file-name
+                         "radian.el"
+                         (file-name-directory
+                          (file-symlink-p (or user-init-file
+                                              "~/.emacs.d/init.el"))))
+  "File containing main Radian configuration.
+This file is loaded by init.el.")
+
+(defvar radian--finalize-init-hook nil
+          "Hook run unconditionally after init, even if it fails.
+Unlike `after-init-hook', this hook is run every time the
+init-file is loaded, not just once.")
 ;;; Detect stale bytecode
 
 ;; If Emacs version changed, the bytecode is no longer valid and we
@@ -17,11 +45,10 @@
             (emacs-version)
             radian-lib-file)
            ',(eval-when-compile
-               (list
-                (emacs-version)
-                radian-lib-file)))
+               '(list
+                 (emacs-version)
+                 radian-lib-file)))
     (throw 'stale-bytecode nil)))
-
 ;;; Load built-in utility libraries
 
 (require 'cl-lib)
@@ -49,12 +76,13 @@
 
 ;;; Define utility functions and variables
 
-(defvar radian-disabled-packages nil
+(eval-and-compile
+  (defvar radian-disabled-packages nil
   "List of packages that Radian should not load.
 
 Radian always loads the packages `use-package', `straight',
 `blackout', `bind-key' and `el-patch' even if they are members of
-this list.")
+this list."))
 
 (defvar radian-compiling nil
   "Non-nil when Radian's make is being called.")
@@ -65,9 +93,10 @@ this list.")
                             radian-lib-file)))
   "Path to the Radian Git repository.")
 
-(defun radian-enabled-p (package)
-  "Return nil if PACKAGE should not be loaded by Radian."
-  (not (memq package radian-disabled-packages)))
+(eval-and-compile
+  (defun radian-enabled-p (package)
+    "Return nil if PACKAGE should not be loaded by Radian."
+    (not (memq package radian-disabled-packages))))
 
 (defmacro radian-protect-macros (&rest body)
   "Eval BODY, protecting macros from incorrect expansion.
@@ -343,11 +372,12 @@ For use with `radian-local-on-hook' in init.local.el."
   :group 'radian-hooks
   :type 'hook)
 
-(defvar radian--hook-contents nil
-  "Alist mapping local init hooks to lists of forms.
+(eval-and-compile
+  (defvar radian--hook-contents nil
+    "Alist mapping local init hooks to lists of forms.
 This is used to embed local init hook code directly into the
 init-file at the appropriate places during byte-compilation,
-without breaking macro-expansion.")
+without breaking macro-expansion."))
 
 ;; Idempotency.
 (setq radian--hook-contents nil)
@@ -355,6 +385,28 @@ without breaking macro-expansion.")
 ;; Allow binding this variable dynamically before straight.el has been
 ;; loaded.
 (defvar straight-current-profile)
+
+(defmacro radian-local-on-hook (name &rest body)
+  "Register some code to be run on one of Radian's hooks.
+The hook to be used is `radian-NAME-hook', with NAME an unquoted
+symbol, and the code which is added is BODY wrapped in a `progn'.
+See \\[customize-group] RET radian-hooks RET for a list of hooks
+which you can use with this macro in your local init-file.
+
+Using this macro instead of defining functions and adding them to
+Radian's hooks manually means that a lot of magic happens which
+allows Radian to embed your entire local init-file into Radian
+during byte-compilation without breaking macroexpansion in
+unexpected ways."
+  (declare (indent 1))
+  (let ((func-name (intern (format "radian-local--%S" name)))
+        (hook (intern (format "radian-%S-hook" name))))
+    `(progn
+       (radian-defhook ,func-name ()
+         ,hook
+         "Automatically-generated local hook function."
+         (radian-protect-macros
+           ,@body)))))
 
 (defmacro radian--load-local-init-file ()
   "Load local init-file, with crazy hacks for byte-compilation.
@@ -399,71 +451,46 @@ usual."
 (defmacro radian--load-local-init-folder ()
   "Load local init-files, with crazy hacks for byte-compilation."
   (let ((hook-name 'after-init)
-        (files (cl-loop for el in
-                        (directory-files
-                         radian-local-init-folder
-                         t
-                         "\\(.*\\)\\.el$")
-                        collect (file-name-nondirectory el) into ret
-                        finally return (sort ret 'string<))))
-      (if byte-compile-current-file
-      (let ((hook (intern (format "radian-%S-hook" hook-name)))
-            (hook-content))
-        (with-temp-buffer
-          ;; Save all file contents as forms in `hook-contents'
-          (ignore-errors
-            ;; Can't do this literally because it breaks Unicode
-            ;; characters.
-            (cl-loop for el in files
-                     do (progn
-                          (insert (with-temp-buffer
-                                    (insert-file-contents
-                                     (expand-file-name el radian-local-init-folder))
-                                    (buffer-string)))))
-            (goto-char (point-min))
-            (condition-case _
-                (while t
-                  (let ((body (read (current-buffer))))
-                    (push body hook-content)))
-              (end-of-file))))
-        ;; NOTE: To reverse or not to reverse!
-        (if-let (link (assq hook radian--hook-contents))
-            (progn
-              ;; TODO: Need to append stuff to it
-              (setq link (cons hook nil)))
-          (push (cons hook hook-content)
-                radian--hook-contents))
-        ;; Don't execute any forms now, they will be executed later
-        ;; in a hook
-        nil)
-    (append
-     `(radian-local-on-hook ,hook-name)
-     (cl-loop for el in files
-              collect
-              `(load ,(expand-file-name el radian-local-init-folder)
-                     'noerror 'nomessage))))))
-
-(defmacro radian-local-on-hook (name &rest body)
-  "Register some code to be run on one of Radian's hooks.
-The hook to be used is `radian-NAME-hook', with NAME an unquoted
-symbol, and the code which is added is BODY wrapped in a `progn'.
-See \\[customize-group] RET radian-hooks RET for a list of hooks
-which you can use with this macro in your local init-file.
-
-Using this macro instead of defining functions and adding them to
-Radian's hooks manually means that a lot of magic happens which
-allows Radian to embed your entire local init-file into Radian
-during byte-compilation without breaking macroexpansion in
-unexpected ways."
-  (declare (indent 1))
-  (let ((func-name (intern (format "radian-local--%S" name)))
-        (hook (intern (format "radian-%S-hook" name))))
-    `(progn
-       (radian-defhook ,func-name ()
-         ,hook
-         "Automatically-generated local hook function."
-         (radian-protect-macros
-           ,@body)))))
+        (files (sort
+                (directory-files radian-local-init-folder t
+                                 "\\(.*\\)\\.el$")
+                (lambda (x y) (string<
+                               (file-name-nondirectory x)
+                               (file-name-nondirectory y))))))
+    (if byte-compile-current-file
+        (let ((hook (intern (format "radian-%S-hook" hook-name)))
+              (hook-content))
+          (with-temp-buffer
+            ;; Save all file contents as forms in `hook-contents'
+            (ignore-errors
+              ;; Can't do this literally because it breaks Unicode
+              ;; characters.
+              (cl-loop for el in files
+                       do (progn
+                            (insert (with-temp-buffer
+                                      (insert-file-contents el)
+                                      (buffer-string)))))
+              (goto-char (point-min))
+              (condition-case _
+                  (while t
+                    (let ((body (read (current-buffer))))
+                      (push body hook-content)))
+                (end-of-file))))
+          ;; NOTE: To reverse or not to reverse!
+          (if-let (link (assq hook radian--hook-contents))
+              (progn
+                ;; TODO: Need to append stuff to it
+                (setq link (cons hook nil)))
+            (push (cons hook hook-content)
+                  radian--hook-contents))
+          ;; Don't execute any forms now, they will be executed later
+          ;; in a hook
+          nil)
+      (append
+       `(radian-local-on-hook ,hook-name)
+       (cl-loop for el in files
+                collect
+                `(load ,el 'noerror 'nomessage))))))
 
 (defmacro radian--run-hook (name)
   "Run the given local init HOOK.
@@ -600,6 +627,17 @@ binding the variable dynamically over the entire init-file."
       (goto-char (point-max))
       (eval-print-last-sexp)))
   (load bootstrap-file nil 'nomessage))
+
+(eval-and-compile
+  (let ((straight.el
+         (expand-file-name
+          "straight/repos/straight.el/straight.el"
+          (or (bound-and-true-p straight-base-dir)
+              user-emacs-directory))))
+    (load (file-name-sans-extension
+           (expand-file-name straight.el default-directory))
+          nil 'nomessage)
+    (require 'straight)))
 
 ;;;; use-package
 
@@ -5455,7 +5493,6 @@ spaces."
 ;; byte-compile-warnings: (not make-local noruntime unresolved)
 ;; checkdoc-symbol-words: ("top-level")
 ;; indent-tabs-mode: nil
-;; no-native-compile: t
 ;; outline-regexp: ";;;+ "
 ;; sentence-end-double-space: nil
 ;; End:
